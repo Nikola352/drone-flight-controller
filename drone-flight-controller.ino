@@ -5,6 +5,10 @@
 
 // ---------------------------------------------------------------------------
 #include <Wire.h>
+#include <IBusBM.h>
+
+IBusBM ibus;
+
 // ------------------- Define some constants for convenience -----------------
 #define CHANNEL1 0
 #define CHANNEL2 1
@@ -27,15 +31,8 @@
 #define STARTING 1
 #define STARTED  2
 // ---------------- Receiver variables ---------------------------------------
-// Previous state of each channel (HIGH or LOW)
-volatile byte previous_state[4];
-
 // Duration of the pulse on each channel of the receiver in µs (must be within 1000µs & 2000µs)
-volatile unsigned int pulse_length[4] = {1500, 1500, 1000, 1500};
-
-// Used to calculate pulse duration on each channel
-volatile unsigned long current_time;
-volatile unsigned long timer[4]; // Timer of each channel
+unsigned int pulse_length[4] = {1500, 1500, 1000, 1500};
 
 // Used to configure which control (yaw, pitch, roll, throttle) is on which channel
 int mode_mapping[4];
@@ -117,6 +114,10 @@ void setup() {
     Wire.begin();
     TWBR = 12; // Set the I2C clock speed to 400kHz.
 
+    // Initialize IBus
+    Serial.begin(115200);
+    ibus.begin(Serial);
+
     // Turn LED on during setup
     pinMode(13, OUTPUT);
     digitalWrite(13, HIGH);
@@ -129,13 +130,6 @@ void setup() {
     calibrateMpu6050();
 
     configureChannelMapping();
-
-    // Configure interrupts for receiver
-    PCICR  |= (1 << PCIE0);  // Set PCIE0 to enable PCMSK0 scan
-    PCMSK0 |= (1 << PCINT0); // Set PCINT0 (digital input 8) to trigger an interrupt on state change
-    PCMSK0 |= (1 << PCINT1); // Set PCINT1 (digital input 9) to trigger an interrupt on state change
-    PCMSK0 |= (1 << PCINT2); // Set PCINT2 (digital input 10)to trigger an interrupt on state change
-    PCMSK0 |= (1 << PCINT3); // Set PCINT3 (digital input 11)to trigger an interrupt on state change
 
     period = (1000000/FREQ) ; // Sampling period in µs
 
@@ -150,6 +144,10 @@ void setup() {
  * Main program loop
  */
 void loop() {
+    // Read IBus data
+    ibus.loop();
+    readReceiverChannels();
+
     // 1. First, read raw values from MPU-6050
     readSensor();
 
@@ -171,6 +169,24 @@ void loop() {
 
     // 6. Apply motors speed
     applyMotorSpeed();
+}
+
+/**
+ * Read receiver channels from IBus
+ */
+void readReceiverChannels() {
+    // Read all 4 channels from IBus receiver
+    // IBus returns values typically in range 1000-2000
+    int ch1 = ibus.readChannel(CHANNEL1);
+    int ch2 = ibus.readChannel(CHANNEL2);
+    int ch3 = ibus.readChannel(CHANNEL3);
+    int ch4 = ibus.readChannel(CHANNEL4);
+
+    // Update pulse_length array only if valid data received (non-zero)
+    if (ch1 != 0) pulse_length[CHANNEL1] = ch1;
+    if (ch2 != 0) pulse_length[CHANNEL2] = ch2;
+    if (ch3 != 0) pulse_length[CHANNEL3] = ch3;
+    if (ch4 != 0) pulse_length[CHANNEL4] = ch4;
 }
 
 /**
@@ -609,64 +625,4 @@ bool isBatteryConnected() {
     battery_voltage = battery_voltage * 0.92 + (analogRead(0) + 65) * 0.09853;
 
     return battery_voltage < 1240 && battery_voltage > 800;
-}
-
-/**
- * This Interrupt Sub Routine is called each time input 8, 9, 10 or 11 changed state.
- * Read the receiver signals in order to get flight instructions.
- *
- * This routine must be as fast as possible to prevent main program to be messed up.
- * The trick here is to use port registers to read pin state.
- * Doing (PINB & B00000001) is the same as digitalRead(8) with the advantage of using less CPU loops.
- * It is less convenient but more efficient, which is the most important here.
- *
- * @see https://www.arduino.cc/en/Reference/PortManipulation
- * @see https://www.firediy.fr/article/utiliser-sa-radiocommande-avec-un-arduino-drone-ch-6
- */
-ISR(PCINT0_vect) {
-        current_time = micros();
-
-        // Channel 1 -------------------------------------------------
-        if (PINB & B00000001) {                                        // Is input 8 high ?
-            if (previous_state[CHANNEL1] == LOW) {                     // Input 8 changed from 0 to 1 (rising edge)
-                previous_state[CHANNEL1] = HIGH;                       // Save current state
-                timer[CHANNEL1] = current_time;                        // Save current time
-            }
-        } else if (previous_state[CHANNEL1] == HIGH) {                 // Input 8 changed from 1 to 0 (falling edge)
-            previous_state[CHANNEL1] = LOW;                            // Save current state
-            pulse_length[CHANNEL1] = current_time - timer[CHANNEL1];   // Calculate pulse duration & save it
-        }
-
-        // Channel 2 -------------------------------------------------
-        if (PINB & B00000010) {                                        // Is input 9 high ?
-            if (previous_state[CHANNEL2] == LOW) {                     // Input 9 changed from 0 to 1 (rising edge)
-                previous_state[CHANNEL2] = HIGH;                       // Save current state
-                timer[CHANNEL2] = current_time;                        // Save current time
-            }
-        } else if (previous_state[CHANNEL2] == HIGH) {                 // Input 9 changed from 1 to 0 (falling edge)
-            previous_state[CHANNEL2] = LOW;                            // Save current state
-            pulse_length[CHANNEL2] = current_time - timer[CHANNEL2];   // Calculate pulse duration & save it
-        }
-
-        // Channel 3 -------------------------------------------------
-        if (PINB & B00000100) {                                        // Is input 10 high ?
-            if (previous_state[CHANNEL3] == LOW) {                     // Input 10 changed from 0 to 1 (rising edge)
-                previous_state[CHANNEL3] = HIGH;                       // Save current state
-                timer[CHANNEL3] = current_time;                        // Save current time
-            }
-        } else if (previous_state[CHANNEL3] == HIGH) {                 // Input 10 changed from 1 to 0 (falling edge)
-            previous_state[CHANNEL3] = LOW;                            // Save current state
-            pulse_length[CHANNEL3] = current_time - timer[CHANNEL3];   // Calculate pulse duration & save it
-        }
-
-        // Channel 4 -------------------------------------------------
-        if (PINB & B00001000) {                                        // Is input 11 high ?
-            if (previous_state[CHANNEL4] == LOW) {                     // Input 11 changed from 0 to 1 (rising edge)
-                previous_state[CHANNEL4] = HIGH;                       // Save current state
-                timer[CHANNEL4] = current_time;                        // Save current time
-            }
-        } else if (previous_state[CHANNEL4] == HIGH) {                 // Input 11 changed from 1 to 0 (falling edge)
-            previous_state[CHANNEL4] = LOW;                            // Save current state
-            pulse_length[CHANNEL4] = current_time - timer[CHANNEL4];   // Calculate pulse duration & save it
-        }
 }
