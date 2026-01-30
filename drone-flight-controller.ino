@@ -5,9 +5,6 @@
 
 // ---------------------------------------------------------------------------
 #include <Wire.h>
-#include <IBusBM.h>
-
-IBusBM ibus;
 
 // ------------------- Define some constants for convenience -----------------
 #define CHANNEL1 0
@@ -27,6 +24,9 @@ IBusBM ibus;
 #define FREQ 250         // Sampling frequency
 #define SSF_GYRO 65.5    // Sensitivity Scale Factor of the gyro from datasheet
 
+// Interrupt pin for PPM
+#define PPM_PIN 2
+
 #define STOPPED 0
 #define STARTING 1
 #define STARTED 2
@@ -36,6 +36,13 @@ unsigned int pulse_length[4] = {1500, 1500, 1000, 1500};
 
 // Used to configure which control (yaw, pitch, roll, throttle) is on which channel
 int mode_mapping[4];
+
+// Channel that is to be read in the next interupt routine
+volatile uint8_t ch = 0;
+
+// Time of the last rising edge (must be within 1000µs & 2000µs for channels, >3000µs for frame sync gap)
+volatile uint32_t lastTime = 0;
+
 // ----------------------- MPU variables -------------------------------------
 // The RAW values got from gyro (in °/sec) in that order: X, Y, Z
 int gyro_raw[3] = {0, 0, 0};
@@ -115,18 +122,17 @@ void setup()
     Wire.begin();
     TWBR = 12; // Set the I2C clock speed to 400kHz.
 
-    // Initialize IBus
-    Serial.begin(115200);
-    ibus.begin(Serial);
-
     // Turn LED on during setup
     pinMode(13, OUTPUT);
     digitalWrite(13, HIGH);
 
-    // // Set pins #4 #5 #6 #7 as outputs
-    // DDRD |= B11110000;
+    //Set pins #6 #9 #10 #11 as outputs
     DDRD |= (1 << 6); // pin 6 OUTPUT
     DDRB |= B00001110;
+
+    // Interupt routine for PPM (radio receiver)
+    pinMode(PPM_PIN, INPUT);
+    attachInterrupt(digitalPinToInterrupt(PPM_PIN), ppmISR, RISING);
 
     setupMpu6050Registers();
 
@@ -148,10 +154,6 @@ void setup()
  */
 void loop()
 {
-    // Read IBus data
-    ibus.loop();
-    readReceiverChannels();
-
     // 1. First, read raw values from MPU-6050
     readSensor();
 
@@ -177,57 +179,20 @@ void loop()
 }
 
 /**
- * Read receiver channels from IBus
- */
-void readReceiverChannels()
-{
-    // Read all 4 channels from IBus receiver
-    // IBus returns values typically in range 1000-2000
-    int ch1 = ibus.readChannel(CHANNEL1);
-    int ch2 = ibus.readChannel(CHANNEL2);
-    int ch3 = ibus.readChannel(CHANNEL3);
-    int ch4 = ibus.readChannel(CHANNEL4);
+* Interrupt routine that populates pulse_length based on signal from radio receiver.
+*/
+void ppmISR() {
+  uint32_t now = micros();
+  uint32_t diff = now - lastTime;
+  lastTime = now;
 
-    // Update pulse_length array only if valid data received (non-zero)
-    if (ch1 != 0)
-        pulse_length[CHANNEL1] = ch1;
-    if (ch2 != 0)
-        pulse_length[CHANNEL2] = ch2;
-    if (ch3 != 0)
-        pulse_length[CHANNEL3] = ch3;
-    if (ch4 != 0)
-        pulse_length[CHANNEL4] = ch4;
+  if (diff > 3000) {
+    ch = 0; // frame start
+  } else if (ch < 4) {
+    pulse_length[ch++] = diff;
+  }
 }
 
-/**
- * Generate servo-signal on digital pins #4 #5 #6 #7 with a frequency of 250Hz (4ms period).
- * Direct port manipulation is used for performances.
- *
- * This function might not take more than 2ms to run, which lets 2ms remaining to do other stuff.
- *
- * @see https:// www.arduino.cc/en/Reference/PortManipulation
- */
-// void applyMotorSpeed() {
-//     // Refresh rate is 250Hz: send ESC pulses every 4000µs
-//     while ((now = micros()) - loop_timer < period);
-
-//     // Update loop timer
-//     loop_timer = now;
-
-//     // Set pins #4 #5 #6 #7 HIGH
-//     PORTD |= B11110000;
-
-//     // Wait until all pins #4 #5 #6 #7 are LOW
-//     while (PORTD >= 16) {
-//         now        = micros();
-//         difference = now - loop_timer;
-
-//         if (difference >= pulse_length_esc1) PORTD &= B11101111; // Set pin #4 LOW
-//         if (difference >= pulse_length_esc2) PORTD &= B11011111; // Set pin #5 LOW
-//         if (difference >= pulse_length_esc3) PORTD &= B10111111; // Set pin #6 LOW
-//         if (difference >= pulse_length_esc4) PORTD &= B01111111; // Set pin #7 LOW
-//     }
-// }
 void applyMotorSpeed()
 {
     while ((now = micros()) - loop_timer < period)
