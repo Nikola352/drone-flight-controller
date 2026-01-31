@@ -96,9 +96,9 @@ float delta_err[3] = {0, 0, 0};      // Error deltas in that order   : Yaw, Pitc
 float error_sum[3] = {0, 0, 0};      // Error sums (used for integral component) : [Yaw, Pitch, Roll]
 float previous_error[3] = {0, 0, 0}; // Last errors (used for derivative component) : [Yaw, Pitch, Roll]
 // PID coefficients
-float Kp[3] = {4.0, 1.3, 1.3};    // P coefficients in that order : Yaw, Pitch, Roll
-float Ki[3] = {0.02, 0.04, 0.04}; // I coefficients in that order : Yaw, Pitch, Roll
-float Kd[3] = {0, 18, 18};        // D coefficients in that order : Yaw, Pitch, Roll
+float Kp[3] = {1.0, 0.4, 0.4};    // P coefficients in that order : Yaw, Pitch, Roll
+float Ki[3] = {0.02, 0.001, 0.001}; // I coefficients in that order : Yaw, Pitch, Roll
+float Kd[3] = {0, 6, 6};        // D coefficients in that order : Yaw, Pitch, Roll
 // ---------------------------------------------------------------------------
 /**
  * Status of the quadcopter:
@@ -144,6 +144,9 @@ void setup()
 
     // Initialize loop_timer
     loop_timer = micros();
+
+    // Debugging
+    Serial.begin(115200);
 
     // Turn LED off now setup is done
     digitalWrite(13, LOW);
@@ -213,9 +216,9 @@ void applyMotorSpeed()
         if (difference >= pulse_length_esc2)
             PORTB &= ~(1 << 1); // M2 (pin 9)
         if (difference >= pulse_length_esc3)
-            PORTB &= ~(1 << 3); // M3 (pin 11)
+            PORTB &= ~(1 << 2); // M3 (pin 10)
         if (difference >= pulse_length_esc4)
-            PORTB &= ~(1 << 2); // M4 (pin 10)
+            PORTB &= ~(1 << 3); // M4 (pin 11)
     }
 }
 
